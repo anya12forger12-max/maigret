@@ -83,7 +83,7 @@
 <a id="one-minute"></a>
 ## In one minute
 
-Ensure you have Python 3.10 or higher.
+Ensure you have Python 3.11.5 or higher.
 
 ```bash
 pip install maigret
