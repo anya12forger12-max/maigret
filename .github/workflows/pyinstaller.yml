@@ -33,18 +33,18 @@ jobs:
       - name: Prepare requirements for Wine (setuptools last)
         run: |
           set -euo pipefail
-          cp pyinstaller/requirements.txt pyinstaller/requirements-wine.txt
+          # The action auto-installs pyinstaller/requirements.txt (it has no
+          # `requirements` input), so append setuptools there instead.
           {
             echo ""
             echo "# CI: setuptools last so pkg_resources exists for PyInstaller/altgraph in Wine"
             echo "setuptools==70.0.0"
-          } >> pyinstaller/requirements-wine.txt
+          } >> pyinstaller/requirements.txt
 
       - name: PyInstaller Windows Build
         uses: JackMcKew/pyinstaller-action-windows@a8dee21ad01bbc7e7363d445bb632691b95ba057 # v0.1.2
         with:
           path: pyinstaller
-          requirements: requirements-wine.txt
 
       - name: Upload PyInstaller Binary to Workflow as Artifact
         if: success()
