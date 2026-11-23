@@ -41,7 +41,7 @@ jobs:
           } >> pyinstaller/requirements-wine.txt
 
       - name: PyInstaller Windows Build
-        uses: JackMcKew/pyinstaller-action-windows@main
+        uses: JackMcKew/pyinstaller-action-windows@a8dee21ad01bbc7e7363d445bb632691b95ba057 # v0.1.2
         with:
           path: pyinstaller
           requirements: requirements-wine.txt
