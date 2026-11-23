@@ -41,20 +41,26 @@ jobs:
             echo "setuptools==70.0.0"
           } >> pyinstaller/requirements.txt
 
+      # The pinned action runs Wine inside Docker; current hosted runners fail
+      # with `wine: socket : Function not implemented` before PyInstaller even
+      # starts. Keep trying (it works on runners with the needed syscall), but
+      # don't block the rest of CI and never publish a missing binary.
       - name: PyInstaller Windows Build
+        id: pyinstaller
+        continue-on-error: true
         uses: JackMcKew/pyinstaller-action-windows@a8dee21ad01bbc7e7363d445bb632691b95ba057 # v0.1.2
         with:
           path: pyinstaller
 
       - name: Upload PyInstaller Binary to Workflow as Artifact
-        if: success()
+        if: steps.pyinstaller.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: maigret_standalone_win32
           path: pyinstaller/dist/windows
 
       - name: Download PyInstaller Binary
-        if: success()
+        if: steps.pyinstaller.outcome == 'success'
         uses: actions/download-artifact@v4
         with:
           name: maigret_standalone_win32
@@ -65,7 +71,7 @@ jobs:
       # pinned to the first build forever while the attached .exe keeps being
       # replaced on every push.
       - name: Move the nightly tag to the built commit
-        if: success()
+        if: steps.pyinstaller.outcome == 'success'
         run: |
           set -euo pipefail
           git tag --force "$NIGHTLY_TAG" "$GITHUB_SHA"
@@ -74,7 +80,7 @@ jobs:
           git push --force origin "refs/tags/$NIGHTLY_TAG"
 
       - name: Create New Release and Upload PyInstaller Binary to Release
-        if: success()
+        if: steps.pyinstaller.outcome == 'success'
         uses: ncipollo/release-action@v1.14.0
         id: create_release
         with:

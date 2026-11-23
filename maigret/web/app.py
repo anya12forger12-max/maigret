@@ -9,7 +9,6 @@ from flask import (
     url_for,
 )
 from werkzeug.exceptions import NotFound
-from urllib.parse import urlparse
 import logging
 import os
 import asyncio
@@ -564,19 +563,14 @@ def api_sites():
 def settings_update():
     save_settings(parse_settings_form(request.form))
     flash('Settings saved.', 'success')
-    # The Referer header is attacker-controlled. Only redirect back to this
-    # application; anything else falls back to the local index.
-    target = request.referrer
-    if target:
-        parsed = urlparse(target)
-        if parsed.netloc:
-            # Absolute referrer: same origin only.
-            if parsed.scheme not in ('http', 'https') or parsed.netloc != request.host:
-                target = None
-        elif not target.startswith('/') or target.startswith('//'):
-            # Relative referrers are safe unless they are protocol-relative.
-            target = None
-    return redirect(target or url_for('index'))
+    # The Referer header is attacker-controlled. Never pass it to redirect()
+    # directly: look it up in a fixed allowlist so the redirect target is
+    # always one of our own local routes.
+    safe_targets = {
+        '/': url_for('index'),
+        '/history': url_for('history'),
+    }
+    return redirect(safe_targets.get(request.referrer, url_for('index')))
 
 
 @app.route('/history')
