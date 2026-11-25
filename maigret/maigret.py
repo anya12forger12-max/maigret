@@ -998,25 +998,25 @@ async def main():
 
         # reporting for a one username
         if args.xmind:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(username=username, postfix='.xmind')
             save_xmind_report(filename, username, results)
             query_notify.warning(f'XMind report for {username} saved in {filename}')
 
         if args.csv:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(username=username, postfix='.csv')
             save_csv_report(filename, username, results)
             query_notify.warning(f'CSV report for {username} saved in {filename}')
 
         if args.txt:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(username=username, postfix='.txt')
             save_txt_report(filename, username, results)
             query_notify.warning(f'TXT report for {username} saved in {filename}')
 
         if args.json:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(
                 username=username, postfix=f'_{args.json}.json'
             )
@@ -1046,7 +1046,7 @@ async def main():
         username = report_context['username']
 
         if args.html:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(
                 username=username, postfix='_plain.html'
             )
@@ -1054,7 +1054,7 @@ async def main():
             query_notify.warning(f'HTML report on all usernames saved in {filename}')
 
         if args.pdf:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(username=username, postfix='.pdf')
             try:
                 save_pdf_report(filename, report_context)
@@ -1066,7 +1066,7 @@ async def main():
                 )
 
         if args.md:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(username=username, postfix='.md')
             run_flags = []
             if args.tags:
@@ -1083,7 +1083,7 @@ async def main():
             query_notify.warning(f'Markdown report on all usernames saved in {filename}')
 
         if args.graph:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(
                 username=username, postfix='_graph.html'
             )
@@ -1091,7 +1091,7 @@ async def main():
             query_notify.warning(f'Graph report on all usernames saved in {filename}')
 
         if args.neo4j:
-            username = username.replace('/', '_')
+            username = username.replace('/', '_').replace('\\', '_')
             filename = report_filepath_tpl.format(
                 username=username, postfix='_neo4j.cypher'
             )

@@ -1,5 +1,7 @@
 import asyncio
+import ssl
 from argparse import ArgumentTypeError
+from urllib.parse import urlparse
 
 from unittest.mock import Mock
 import pytest
@@ -9,6 +11,8 @@ from curl_cffi import CurlError
 from maigret import search
 from maigret.activation import ParsingActivator
 from maigret.checking import (
+    format_site_url,
+    make_tls_context,
     extract_ids_data,
     parse_usernames,
     update_results_info,
@@ -1947,3 +1951,28 @@ def test_normalize_proxy_scheme(transport, given, expected):
     from maigret.checking import normalize_proxy_scheme
 
     assert normalize_proxy_scheme(given, transport) == expected
+
+
+def test_format_site_url_percent_encodes_username_reserved_characters():
+    site = MaigretSite(
+        'ContactInBio',
+        {'url_main': 'https://contactin.bio', 'url_subpath': ''},
+    )
+    url = format_site_url('http://{username}.contactin.bio/', site, '127.0.0.1/')
+    assert urlparse(url).hostname != '127.0.0.1'
+    assert '%2F' in urlparse(url).hostname
+
+    probe = format_site_url('https://example.test/u/{username}', site, 'a/b?c=1#d')
+    assert urlparse(probe).path == '/u/a%2Fb%3Fc%3D1%23d'
+
+
+def test_tls_context_verifies_by_default(monkeypatch):
+    monkeypatch.delenv('MAIGRET_INSECURE_TLS', raising=False)
+    context = make_tls_context()
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl.CERT_REQUIRED
+
+    monkeypatch.setenv('MAIGRET_INSECURE_TLS', '1')
+    context = make_tls_context()
+    assert context.check_hostname is False
+    assert context.verify_mode == ssl.CERT_NONE

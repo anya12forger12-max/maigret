@@ -786,7 +786,9 @@ def generate_json_report(username: str, results: dict, file, report_type):
         data = dict(site_result)
         data["status"] = data["status"].json()
         data["site"] = data["site"].json
-        for field in ["future", "checker"]:
+        for field in ["future", "checker", "cookies"]:
+            # Cookies can contain activated session credentials and are not
+            # JSON-serializable in a stable way. Never export them.
             if field in data:
                 del data[field]
 

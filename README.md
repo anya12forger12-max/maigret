@@ -226,6 +226,8 @@ PDF reports (`--pdf`) are an optional extra — install with `pip install 'maigr
 
 ## Usage
 
+> TLS certificates are verified by default. If you intentionally scan hosts with invalid or expired certificates, set `MAIGRET_INSECURE_TLS=1` to restore the previous permissive behavior.
+
 ### Examples
 
 ```bash
