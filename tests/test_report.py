@@ -439,6 +439,22 @@ def test_generate_json_ndjson_report():
     assert json.loads(data[0])['sitename'] == 'GitHub'
 
 
+def test_generate_json_report_redacts_site_headers_and_cookies():
+    results = copy.deepcopy(EXAMPLE_RESULTS)
+    results['GitHub']['site'].headers = {'Authorization': 'Bearer super-secret'}
+    results['GitHub']['cookies'] = {'SUB': 'session-secret'}
+
+    jsonfile = StringIO()
+    generate_json_report('test', results, jsonfile, 'ndjson')
+    jsonfile.seek(0)
+    body = jsonfile.read()
+
+    assert 'super-secret' not in body
+    assert 'Bearer' not in body
+    assert 'session-secret' not in body
+    assert json.loads(body.strip())['sitename'] == 'GitHub'
+
+
 def test_save_xmind_report():
     filename = 'report_test.xmind'
     save_xmind_report(filename, 'test', EXAMPLE_RESULTS)

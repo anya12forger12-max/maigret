@@ -46,9 +46,15 @@ Upstream also publishes `soxoj/maigret:latest` (CLI) and `soxoj/maigret:web` (br
 
 ## Usage
 
+> TLS certificates are verified by default. If you intentionally scan hosts with invalid or expired certificates, set `MAIGRET_INSECURE_TLS=1` to restore the previous permissive behavior.
+
+### Examples
+
 ```sh
 maigret user --html                 # HTML report
-maigret user --json ndjson          # machine-readable export
+maigret user --pdf                  # PDF report
+maigret user --xmind                # legacy XML with a manifest for XMind 2022+ readers
+maigret user --json ndjson          # newline-delimited JSON (also: --json simple)
 maigret user --csv
 maigret user --graph                # interactive D3 graph
 maigret user --neo4j                # Neo4j Cypher import script

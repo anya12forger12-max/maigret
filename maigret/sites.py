@@ -34,6 +34,10 @@ class MaigretSite:
         "engineObj",
         "stats",
         "urlRegexp",
+        # Site definitions and runtime activators both put credentials here
+        # (Bearer tokens, cookies, app tokens). Reports are downloadable and
+        # must never contain them.
+        "headers",
     ]
 
     # Username known to exist on the site

@@ -45,6 +45,37 @@ _DNS_ERROR_MARKERS = (
 )
 
 
+def format_site_url(template: str, site: MaigretSite, username: str) -> str:
+    """Format a site URL template with a fully percent-encoded username.
+
+    ``urllib.parse.quote`` defaults to ``safe='/'``. A username such as
+    ``127.0.0.1/`` would therefore turn ``http://{username}.example/`` into
+    ``http://127.0.0.1/.example/`` and make the process request its own
+    loopback interface (SSRF). Encoding every reserved character keeps the
+    username confined to a single URL component.
+    """
+    url = template.format(
+        urlMain=site.url_main,
+        urlSubpath=site.url_subpath,
+        username=quote(str(username), safe=''),
+    )
+    # Workaround to prevent slash errors in site definitions.
+    return re.sub("(?<!:)/+", "/", url)
+
+
+def make_tls_context() -> ssl.SSLContext:
+    """Build the TLS context used for target requests.
+
+    Certificates are verified by default. Operators who intentionally scan
+    hosts with broken certificates can opt out with MAIGRET_INSECURE_TLS=1.
+    """
+    context = ssl.create_default_context()
+    if os.getenv('MAIGRET_INSECURE_TLS', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def _is_dns_error(exc: Exception) -> bool:
     """Classify a ClientConnectorError as DNS-class or not.
 
@@ -310,20 +341,21 @@ class SimpleAiohttpChecker(CheckerBase):
         from aiohttp_socks import ProxyConnector
 
         # Use a real SSL context instead of ssl=False to avoid TLS fingerprinting
-        # blocks by Cloudflare and similar WAFs. Certificate verification is
-        # disabled to handle sites with invalid/expired certs.
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
+        # blocks by Cloudflare and similar WAFs. Verification stays enabled
+        # unless the operator explicitly opts out.
+        ssl_context = make_tls_context()
 
-        # Build the TCPConnector with an explicit resolver when 'threaded' is
+        # Build the connector with an explicit resolver when 'threaded' is
         # requested. ProxyConnector takes its own resolver kwarg too, so apply
         # the same setting on both code paths.
         resolver = ThreadedResolver() if self.dns_resolver == 'threaded' else None
+        connector_kwargs = {'ssl': ssl_context}
+        if resolver:
+            connector_kwargs['resolver'] = resolver
         if self.proxy:
-            connector = ProxyConnector.from_url(self.proxy, resolver=resolver) if resolver else ProxyConnector.from_url(self.proxy)
+            connector = ProxyConnector.from_url(self.proxy, **connector_kwargs)
         else:
-            connector = TCPConnector(ssl=ssl_context, resolver=resolver) if resolver else TCPConnector(ssl=ssl_context)
+            connector = TCPConnector(**connector_kwargs)
 
         async with ClientSession(
             connector=connector,
@@ -933,12 +965,7 @@ def make_site_result(
         logger.info(f"Use {site.url_main} as a main url of site {site}")
 
     # URL of user on site (if it exists)
-    url = site.url.format(
-        urlMain=site.url_main, urlSubpath=site.url_subpath, username=quote(username)
-    )
-
-    # workaround to prevent slash errors
-    url = re.sub("(?<!:)/+", "/", url)
+    url = format_site_url(site.url, site, username)
 
     # Select checker. Order of precedence:
     # 1. Cloudflare webgate (FlareSolverr / CloudflareBypassForScraping) when
@@ -1019,11 +1046,7 @@ def make_site_result(
         else:
             # There is a special URL for probing existence separate
             # from where the user profile normally can be found.
-            url_probe = url_probe.format(
-                urlMain=site.url_main,
-                urlSubpath=site.url_subpath,
-                username=username,
-            )
+            url_probe = format_site_url(url_probe, site, username)
 
         for k, v in site.get_params.items():
             url_probe += f"&{k}={v}"

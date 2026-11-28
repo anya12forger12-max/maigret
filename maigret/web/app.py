@@ -1,8 +1,10 @@
 from flask import (
     Flask,
+    abort,
     render_template,
     request,
     send_from_directory,
+    session,
     Response,
     flash,
     redirect,
@@ -14,8 +16,9 @@ import os
 import asyncio
 import json
 import queue
+import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread
 from typing import Any, Dict
 import maigret
@@ -38,6 +41,13 @@ job_results = {}
 # ponytail: in-memory, single-process. Entries are dropped when their SSE stream
 # ends; a stream that's never consumed lingers — fine for a local tool.
 live_jobs: Dict[str, Any] = {}
+
+# The web UI is unauthenticated by design (a local OSINT tool), so bound the
+# work a single visitor can queue and reject usernames that can alter the
+# structure of the URLs we request.
+MAX_SCAN_USERNAMES = 20
+MAX_CONCURRENT_JOBS = 3
+FINISHED_JOB_TTL = timedelta(hours=1)
 
 
 class StreamNotify:
@@ -164,6 +174,13 @@ def save_settings(settings):
         json.dump(settings, f, indent=2)
 
 
+def clean_proxy(value: str, field: str) -> str:
+    value = value.strip()
+    if len(value) > 512 or any(ord(char) < 32 for char in value):
+        raise ValueError(f'Invalid {field} value')
+    return value
+
+
 def parse_settings_form(form):
     try:
         timeout = int(form.get('timeout'))
@@ -181,9 +198,9 @@ def parse_settings_form(form):
         'tags': form.getlist('tags'),
         'excluded_tags': form.getlist('excluded_tags'),
         'site_list': [s.strip() for s in form.get('site', '').split(',') if s.strip()],
-        'proxy': form.get('proxy', '').strip(),
-        'tor_proxy': form.get('tor_proxy', '').strip(),
-        'i2p_proxy': form.get('i2p_proxy', '').strip(),
+        'proxy': clean_proxy(form.get('proxy', ''), 'proxy'),
+        'tor_proxy': clean_proxy(form.get('tor_proxy', ''), 'tor proxy'),
+        'i2p_proxy': clean_proxy(form.get('i2p_proxy', ''), 'i2p proxy'),
         'permute': 'permute' in form,
         'disable_recursive_search': 'disable_recursive_search' in form,
         'disable_extracting': 'disable_extracting' in form,
@@ -191,9 +208,20 @@ def parse_settings_form(form):
     }
 
 
+def settings_csrf_token() -> str:
+    token = session.get('_settings_csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['_settings_csrf_token'] = token
+    return token
+
+
 @app.context_processor
 def inject_settings():
-    return {'web_settings': load_settings()}
+    return {
+        'web_settings': load_settings(),
+        'settings_csrf_token': settings_csrf_token,
+    }
 
 
 def setup_logger(log_level, name):
@@ -403,7 +431,20 @@ def process_search_task(usernames, options, timestamp):
 
 def parse_usernames(form):
     usernames_input = form.get('usernames', '').strip()
-    return [u.strip() for u in usernames_input.replace(',', ' ').split() if u.strip()]
+    usernames = [
+        u.strip() for u in usernames_input.replace(',', ' ').split() if u.strip()
+    ]
+    if len(usernames) > MAX_SCAN_USERNAMES:
+        raise ValueError(f'At most {MAX_SCAN_USERNAMES} usernames can be scanned at once')
+    for username in usernames:
+        if (
+            len(username) > 100
+            or username in ('.', '..')
+            or any(char in username for char in '/\\@:?#')
+            or any(ord(char) < 32 for char in username)
+        ):
+            raise ValueError(f'Invalid username: {username!r}')
+    return usernames
 
 
 def parse_search_options(form):
@@ -470,6 +511,7 @@ def run_stream_job(job_id, usernames, options):
     except Exception as e:
         job['queue'].put({'type': 'error', 'message': str(e)})
     finally:
+        job['completed'] = True
         loop.close()
 
     # Same report files + results page as the classic /search flow, so the
@@ -485,11 +527,28 @@ def run_stream_job(job_id, usernames, options):
     job['queue'].put(done_event)
 
 
+def prune_finished_jobs(store):
+    cutoff = datetime.now() - FINISHED_JOB_TTL
+    for key, job in list(store.items()):
+        created = job.get('created_at')
+        if job.get('completed') and isinstance(created, datetime) and created < cutoff:
+            store.pop(key, None)
+
+
+def active_job_count(store) -> int:
+    return sum(1 for job in store.values() if not job.get('completed', False))
+
+
 def start_live_job(usernames, options):
+    prune_finished_jobs(live_jobs)
+    if active_job_count(live_jobs) >= MAX_CONCURRENT_JOBS:
+        raise RuntimeError('Too many scans are already running')
     job_id = uuid.uuid4().hex
     live_jobs[job_id] = {
         'queue': queue.Queue(),
         'cancelled': False,
+        'completed': False,
+        'created_at': datetime.now(),
         'loop': None,
         'task': None,
     }
@@ -499,12 +558,18 @@ def start_live_job(usernames, options):
 
 @app.route('/api/scan', methods=['POST'])
 def scan_start():
-    usernames = parse_usernames(request.form)
+    try:
+        usernames = parse_usernames(request.form)
+    except ValueError as e:
+        return {'error': str(e)}, 400
     if not usernames:
         return {'error': 'At least one username is required'}, 400
 
     options = parse_search_options(request.form)
-    job_id = start_live_job(usernames, options)
+    try:
+        job_id = start_live_job(usernames, options)
+    except RuntimeError as e:
+        return {'error': str(e)}, 429
     return {'job_id': job_id}
 
 
@@ -561,7 +626,16 @@ def api_sites():
 
 @app.route('/settings', methods=['POST'])
 def settings_update():
-    save_settings(parse_settings_form(request.form))
+    expected = session.get('_settings_csrf_token')
+    supplied = request.form.get('csrf_token', '')
+    if not expected or not secrets.compare_digest(str(supplied), str(expected)):
+        abort(403)
+    try:
+        settings = parse_settings_form(request.form)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('index'))
+    save_settings(settings)
     flash('Settings saved.', 'success')
     # The Referer header is attacker-controlled. Never pass it to redirect()
     # directly: look it up in a fixed allowlist so the redirect target is
@@ -583,13 +657,21 @@ def history():
 
 @app.route('/live', methods=['POST'])
 def live_start():
-    usernames = parse_usernames(request.form)
+    try:
+        usernames = parse_usernames(request.form)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('index'))
     if not usernames:
         flash('At least one username is required', 'danger')
         return redirect(url_for('index'))
 
     options = parse_search_options(request.form)
-    job_id = start_live_job(usernames, options)
+    try:
+        job_id = start_live_job(usernames, options)
+    except RuntimeError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('index'))
     return redirect(url_for('live_results', job_id=job_id))
 
 
@@ -610,9 +692,18 @@ def live_results(job_id):
 # Modified search route
 @app.route('/search', methods=['POST'])
 def search():
-    usernames = parse_usernames(request.form)
+    try:
+        usernames = parse_usernames(request.form)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('index'))
     if not usernames:
         flash('At least one username is required', 'danger')
+        return redirect(url_for('index'))
+
+    prune_finished_jobs(background_jobs)
+    if active_job_count(background_jobs) >= MAX_CONCURRENT_JOBS:
+        flash('Too many scans are already running', 'danger')
         return redirect(url_for('index'))
 
     # Create timestamp for this search session
@@ -627,6 +718,7 @@ def search():
     # Start background job
     background_jobs[timestamp] = {
         'completed': False,
+        'created_at': datetime.now(),
         'thread': Thread(
             target=process_search_task, args=(usernames, options, timestamp)
         ),

@@ -45,11 +45,13 @@ def web_app(tmp_path):
 
     web_app_module.background_jobs.clear()
     web_app_module.job_results.clear()
+    web_app_module.live_jobs.clear()
 
     yield web_app_module
 
     web_app_module.background_jobs.clear()
     web_app_module.job_results.clear()
+    web_app_module.live_jobs.clear()
 
 
 @pytest.fixture
@@ -736,10 +738,17 @@ def test_save_settings_persists_to_file_and_reloads(web_app):
     assert reloaded['proxy'] == '127.0.0.1:9999'
 
 
+def _settings_csrf(client):
+    with client.session_transaction() as sess:
+        sess['_settings_csrf_token'] = 'test-csrf-token'
+    return 'test-csrf-token'
+
+
 def test_settings_update_saves_and_redirects_back(client, web_app):
     resp = client.post(
         '/settings',
         data={
+            'csrf_token': _settings_csrf(client),
             'timeout': '15',
             'top_sites': '250',
             'tags': ['coding', 'tech'],
@@ -767,7 +776,11 @@ def test_settings_update_saves_and_redirects_back(client, web_app):
 
 
 def test_settings_update_invalid_timeout_falls_back_to_default(client, web_app):
-    client.post('/settings', data={'timeout': 'not-a-number', 'top_sites': 'nope'})
+    client.post('/settings', data={
+        'csrf_token': _settings_csrf(client),
+        'timeout': 'not-a-number',
+        'top_sites': 'nope',
+    })
     settings = web_app.load_settings()
     assert settings['timeout'] == web_app.DEFAULT_SETTINGS['timeout']
     assert settings['top_sites'] == web_app.DEFAULT_SETTINGS['top_sites']
@@ -815,7 +828,71 @@ def test_settings_modal_present_on_every_page(client, web_app):
     body = resp.get_data(as_text=True)
     assert 'id="settingsModal"' in body
     assert 'name="timeout"' in body
+    assert 'name="csrf_token"' in body
 
     resp = client.get('/history')
     body = resp.get_data(as_text=True)
     assert 'id="settingsModal"' in body
+    assert 'name="csrf_token"' in body
+
+
+def test_settings_update_rejects_missing_csrf_token(client, web_app):
+    resp = client.post('/settings', data={'proxy': 'http://attacker.example:8080'})
+    assert resp.status_code == 403
+    assert web_app.load_settings().get('proxy') != 'http://attacker.example:8080'
+
+
+def test_settings_update_rejects_proxy_control_characters(client, web_app):
+    resp = client.post('/settings', data={
+        'csrf_token': _settings_csrf(client),
+        'proxy': 'http://attacker.example:8080\nX-Evil: 1',
+    })
+    assert resp.status_code == 302
+    assert web_app.load_settings()['proxy'] == web_app.DEFAULT_SETTINGS['proxy']
+
+
+@pytest.mark.parametrize('username', [
+    '127.0.0.1/',
+    'user@example.com',
+    '../etc/passwd',
+    'a\\b',
+    'user:8080',
+    '..',
+])
+def test_api_scan_rejects_url_structure_usernames(client, web_app, username):
+    resp = client.post('/api/scan', data={'usernames': username})
+    assert resp.status_code == 400
+    assert 'error' in resp.get_json()
+    assert not web_app.live_jobs
+
+
+def test_api_scan_rejects_too_many_usernames(client, web_app):
+    usernames = ' '.join(f'user{index}' for index in range(web_app.MAX_SCAN_USERNAMES + 1))
+    resp = client.post('/api/scan', data={'usernames': usernames})
+    assert resp.status_code == 400
+    assert not web_app.live_jobs
+
+
+def test_search_rejects_ssrf_style_username(client, web_app):
+    resp = client.post('/search', data={'usernames': '127.0.0.1/'})
+    assert resp.status_code == 302
+    assert resp.location.rstrip('/').endswith('')
+    assert not web_app.background_jobs
+
+
+class _NeverStartThread:
+    def __init__(self, target=None, args=(), kwargs=None, **_):
+        pass
+
+    def start(self):
+        pass
+
+
+def test_api_scan_caps_concurrent_jobs(client, web_app, monkeypatch):
+    monkeypatch.setattr(web_app, 'Thread', _NeverStartThread)
+    for index in range(web_app.MAX_CONCURRENT_JOBS):
+        resp = client.post('/api/scan', data={'usernames': f'user{index}'})
+        assert resp.status_code == 200
+    resp = client.post('/api/scan', data={'usernames': 'extra'})
+    assert resp.status_code == 429
+    assert len(web_app.live_jobs) == web_app.MAX_CONCURRENT_JOBS
